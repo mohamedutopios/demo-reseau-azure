@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Démo Load Balancer</title>
+  <style>
+    :root { --bg:#f4f7fb; --card:#fff; --text:#14212e; --muted:#6b7785; --line:#e6ebf1; --azure:#0078d4; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0f1720; --card:#18222d; --text:#e6edf3; --muted:#8b98a5; --line:#26323f; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+    header { background:linear-gradient(135deg,#0078d4,#3b2a8f); color:#fff; padding:28px 16px 80px; }
+    header div, main { max-width:820px; margin:0 auto; }
+    header h1 { margin:0 0 4px; font-size:26px; }
+    header p { margin:0; opacity:.85; }
+    main { padding:0 16px 40px; margin-top:-56px; }
+    .card { background:var(--card); border-radius:14px; padding:20px; margin-bottom:16px; box-shadow:0 6px 20px rgba(16,24,40,.08); }
+    .label { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:10px; }
+    .current { display:flex; align-items:center; gap:18px; }
+    .dot { width:64px; height:64px; border-radius:16px; flex:none; transition:background .3s; }
+    .current h2 { margin:0; font-size:28px; font-family:ui-monospace,Menlo,monospace; }
+    .current p { margin:4px 0 0; color:var(--muted); }
+    .bars { display:grid; gap:10px; }
+    .bar { display:grid; grid-template-columns:150px 1fr 60px; align-items:center; gap:10px; font-size:14px; }
+    .bar .name { font-family:ui-monospace,Menlo,monospace; overflow:hidden; text-overflow:ellipsis; }
+    .track { height:22px; background:var(--line); border-radius:6px; overflow:hidden; }
+    .fill { height:100%; border-radius:6px; transition:width .3s; }
+    .bar .pct { text-align:right; color:var(--muted); }
+    .log { display:flex; flex-wrap:wrap; gap:4px; }
+    .log span { width:14px; height:14px; border-radius:3px; }
+    .log span.err { background:#d13438 !important; }
+    .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    button { padding:8px 14px; border:0; border-radius:8px; background:var(--azure); color:#fff; font-weight:600; cursor:pointer; }
+    button.secondary { background:var(--line); color:var(--text); }
+    .muted { color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+<header><div>
+  <h1>⚖️ Démo Azure Load Balancer</h1>
+  <p>La page interroge le serveur chaque seconde. Chaque requête ouvre une nouvelle connexion et peut arriver sur une VM différente.</p>
+</div></header>
+<main>
+  <section class="card">
+    <div class="label">Dernière réponse</div>
+    <div class="current">
+      <div class="dot" id="dot"></div>
+      <div>
+        <h2 id="host">…</h2>
+        <p id="detail">En attente de la première réponse</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="label">Répartition des requêtes</div>
+    <div class="bars" id="bars"></div>
+    <p class="muted" id="total"></p>
+  </section>
+
+  <section class="card">
+    <div class="label">60 dernières requêtes (rouge = échec)</div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="card controls">
+    <button id="toggle">⏸ Pause</button>
+    <button class="secondary" id="reset">Remettre à zéro</button>
+    <span class="muted">Requête : <code>GET /info.json</code></span>
+  </section>
+</main>
+<script>
+  const palette = ["#0078d4", "#13a10e", "#ca5010", "#8764b8", "#038387", "#c239b3"];
+  const colors = {};
+  let counts = {}, total = 0, errors = 0, running = true, history = [];
+
+  const colorOf = (h) => colors[h] ??= palette[Object.keys(colors).length % palette.length];
+
+  function render() {
+    const bars = document.getElementById("bars");
+    bars.innerHTML = "";
+    for (const [h, n] of Object.entries(counts).sort()) {
+      const pct = total ? Math.round(n / total * 100) : 0;
+      bars.insertAdjacentHTML("beforeend",
+        `<div class="bar"><span class="name">${h}</span>
+         <div class="track"><div class="fill" style="width:${pct}%;background:${colorOf(h)}"></div></div>
+         <span class="pct">${n} · ${pct} %</span></div>`);
+    }
+    document.getElementById("total").textContent = `${total} réponses, ${errors} échecs`;
+    document.getElementById("log").innerHTML = history
+      .map(h => h ? `<span style="background:${colorOf(h)}" title="${h}"></span>` : `<span class="err"></span>`).join("");
+  }
+
+  async function tick() {
+    if (!running) return;
+    try {
+      const r = await fetch("/info.json?t=" + Date.now(), { cache: "no-store" });
+      const info = await r.json();
+      counts[info.hostname] = (counts[info.hostname] || 0) + 1;
+      total++;
+      history.push(info.hostname);
+      document.getElementById("host").textContent = info.hostname;
+      document.getElementById("detail").textContent = `Zone ${info.zone} · IP privée ${info.ip}`;
+      document.getElementById("dot").style.background = colorOf(info.hostname);
+    } catch {
+      errors++;
+      history.push(null);
+      document.getElementById("detail").textContent = "Échec de la requête";
+    }
+    history = history.slice(-60);
+    render();
+  }
+
+  document.getElementById("toggle").onclick = (e) => {
+    running = !running;
+    e.target.textContent = running ? "⏸ Pause" : "▶ Reprendre";
+  };
+  document.getElementById("reset").onclick = () => { counts = {}; total = 0; errors = 0; history = []; render(); };
+  setInterval(tick, 1000);
+  tick();
+</script>
+</body>
+</html>

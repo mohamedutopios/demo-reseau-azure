@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Démo autoscaling</title>
+  <style>
+    :root { --bg:#f4f7fb; --card:#fff; --text:#14212e; --muted:#6b7785; --line:#e6ebf1; --azure:#0078d4; --ok:#13a10e; --hot:#d13438; --warm:#ca5010; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0f1720; --card:#18222d; --text:#e6edf3; --muted:#8b98a5; --line:#26323f; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+    header { background:linear-gradient(135deg,#0078d4,#13a10e); color:#fff; padding:28px 16px 80px; }
+    header div, main { max-width:900px; margin:0 auto; }
+    header h1 { margin:0 0 4px; font-size:26px; }
+    header p { margin:0; opacity:.9; }
+    main { padding:0 16px 40px; margin-top:-56px; }
+    .card { background:var(--card); border-radius:14px; padding:20px; margin-bottom:16px; box-shadow:0 6px 20px rgba(16,24,40,.08); }
+    .label { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:12px; }
+    .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+    .kpi { border:1px solid var(--line); border-radius:10px; padding:14px; }
+    .kpi strong { display:block; font-size:30px; }
+    .kpi span { color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+    td.mono { font-family:ui-monospace,Menlo,monospace; }
+    .meter { height:10px; background:var(--line); border-radius:999px; overflow:hidden; min-width:120px; }
+    .meter div { height:100%; border-radius:999px; transition:width .4s; }
+    .tag { font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; }
+    .tag.on { background:#fdecec; color:var(--hot); }
+    .tag.gone { background:var(--line); color:var(--muted); }
+    tr.stale td { opacity:.45; }
+    .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    button { padding:10px 16px; border:0; border-radius:8px; background:var(--azure); color:#fff; font-weight:600; cursor:pointer; }
+    button.danger { background:var(--hot); }
+    button.secondary { background:var(--line); color:var(--text); }
+    select { padding:9px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+    .muted { color:var(--muted); font-size:13px; }
+    #journal { font-family:ui-monospace,Menlo,monospace; font-size:12px; max-height:180px; overflow:auto; color:var(--muted); }
+  </style>
+</head>
+<body>
+<header><div>
+  <h1>📈 Démo VM Scale Set — autoscaling</h1>
+  <p>Chaque requête peut être servie par une instance différente. Les nouvelles instances apparaissent dans le tableau dès qu'elles répondent.</p>
+</div></header>
+<main>
+  <section class="card">
+    <div class="label">Vue d'ensemble</div>
+    <div class="kpis">
+      <div class="kpi"><strong id="k-active">0</strong><span>instances actives (vues &lt; 30 s)</span></div>
+      <div class="kpi"><strong id="k-cpu">–</strong><span>CPU moyen des instances actives</span></div>
+      <div class="kpi"><strong id="k-stress">0</strong><span>instances sous charge</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="label">Générer de la charge</div>
+    <div class="controls">
+      <select id="minutes">
+        <option value="5">5 minutes</option>
+        <option value="10" selected>10 minutes</option>
+        <option value="15">15 minutes</option>
+      </select>
+      <button class="danger" id="stress">🔥 Charger les instances</button>
+      <button class="secondary" id="stop">🧊 Arrêter la charge</button>
+    </div>
+    <p class="muted">Le bouton envoie 8 requêtes <code>POST /api/stress</code> : le Load Balancer les répartit, donc toutes les instances présentes reçoivent la charge. Les instances créées ensuite ne sont pas chargées.</p>
+  </section>
+
+  <section class="card">
+    <div class="label">Instances vues par le navigateur</div>
+    <table>
+      <thead><tr><th>Instance</th><th>Zone</th><th>CPU</th><th></th><th>Vue il y a</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <div class="label">Journal</div>
+    <div id="journal"></div>
+  </section>
+</main>
+<script>
+  const instances = {};
+  const journal = (msg) => {
+    const el = document.getElementById("journal");
+    el.insertAdjacentHTML("afterbegin", `<div>${new Date().toLocaleTimeString()} — ${msg}</div>`);
+  };
+  const colorFor = (cpu) => cpu > 60 ? "var(--hot)" : cpu > 25 ? "var(--warm)" : "var(--ok)";
+
+  function record(info) {
+    if (!instances[info.hostname]) journal(`nouvelle instance : <b>${info.hostname}</b> (zone ${info.zone})`);
+    instances[info.hostname] = { ...info, seen: Date.now() };
+  }
+
+  function render() {
+    const now = Date.now();
+    const all = Object.values(instances).sort((a, b) => a.hostname.localeCompare(b.hostname));
+    const active = all.filter(i => now - i.seen < 30000);
+    document.getElementById("k-active").textContent = active.length;
+    document.getElementById("k-cpu").textContent = active.length
+      ? Math.round(active.reduce((s, i) => s + i.cpu, 0) / active.length) + " %" : "–";
+    document.getElementById("k-stress").textContent = active.filter(i => i.stress).length;
+    document.getElementById("rows").innerHTML = all.map(i => {
+      const age = Math.round((now - i.seen) / 1000);
+      const stale = age >= 30;
+      return `<tr class="${stale ? "stale" : ""}">
+        <td class="mono">${i.hostname}</td><td>${i.zone}</td>
+        <td><div class="meter"><div style="width:${i.cpu}%;background:${colorFor(i.cpu)}"></div></div></td>
+        <td>${stale ? '<span class="tag gone">disparue ?</span>' : i.stress ? `<span class="tag on">charge ${Math.ceil(i.stress_remaining_s / 60)} min</span>` : ""} ${Math.round(i.cpu)} %</td>
+        <td>${age} s</td></tr>`;
+    }).join("");
+  }
+
+  async function poll() {
+    // 4 requêtes en parallèle par seconde : de quoi voir passer toutes les instances
+    await Promise.allSettled([1, 2, 3, 4].map(() =>
+      fetch("/api/info?t=" + Math.random(), { cache: "no-store" }).then(r => r.json()).then(record)));
+    render();
+  }
+
+  async function broadcast(path, label) {
+    const results = await Promise.allSettled([...Array(8)].map(() =>
+      fetch(path, { method: "POST" }).then(r => r.json()).then(info => { record(info); return info.hostname; })));
+    const hosts = [...new Set(results.filter(r => r.status === "fulfilled").map(r => r.value))];
+    journal(`${label} reçu par : ${hosts.join(", ") || "aucune instance"}`);
+    render();
+  }
+
+  document.getElementById("stress").onclick = () =>
+    broadcast(`/api/stress?minutes=${document.getElementById("minutes").value}`, "🔥 charge");
+  document.getElementById("stop").onclick = () => broadcast("/api/stop", "🧊 arrêt");
+
+  setInterval(poll, 1000);
+  poll();
+</script>
+</body>
+</html>

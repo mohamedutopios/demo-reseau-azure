@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boutique Contoso</title>
+  <style>
+    :root { --bg:#f6f4f1; --card:#fff; --text:#1f1a14; --muted:#7a7066; --line:#ebe6df; --brand:#8a3ffc; --ok:#13a10e; --ko:#d13438; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#16131a; --card:#221e27; --text:#eee9f2; --muted:#a39bab; --line:#332c3a; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+    header { background:linear-gradient(135deg,#8a3ffc,#d02670); color:#fff; padding:32px 16px 84px; }
+    header div, main { max-width:960px; margin:0 auto; }
+    header h1 { margin:0 0 6px; font-size:30px; }
+    header p { margin:0; opacity:.9; }
+    main { padding:0 16px 40px; margin-top:-60px; }
+    .route { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:18px; }
+    .route div { background:var(--card); border-radius:12px; padding:14px 16px; box-shadow:0 6px 20px rgba(0,0,0,.08); }
+    .route b { display:block; font-family:ui-monospace,Menlo,monospace; font-size:15px; }
+    .route span { color:var(--muted); font-size:13px; }
+    .route .ko b { color:var(--ko); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:16px; }
+    .product { background:var(--card); border-radius:14px; overflow:hidden; box-shadow:0 6px 20px rgba(0,0,0,.08); }
+    .product .img { height:120px; display:grid; place-items:center; font-size:54px; }
+    .product .body { padding:14px 16px 18px; }
+    .product h3 { margin:0 0 4px; font-size:16px; }
+    .product p { margin:0; color:var(--muted); font-size:13px; }
+    .product strong { display:block; margin-top:10px; font-size:18px; color:var(--brand); }
+    .error { background:var(--card); border-left:4px solid var(--ko); border-radius:10px; padding:18px; }
+    .error code { background:var(--line); padding:1px 5px; border-radius:4px; }
+    footer { text-align:center; color:var(--muted); font-size:12px; margin-top:24px; }
+    @media (max-width:560px) { .route { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header><div>
+  <h1>🛍️ Boutique Contoso</h1>
+  <p>Une seule adresse publique : l'Application Gateway envoie <code>/</code> au site web et <code>/api/*</code> à l'API.</p>
+</div></header>
+<main>
+  <div class="route">
+    <div id="r-web"><b>/ → …</b><span>page servie par la VM web</span></div>
+    <div id="r-api"><b>/api/produits → …</b><span>données servies par la VM API</span></div>
+  </div>
+  <div id="catalogue" class="grid"></div>
+  <footer>Démo Azure Application Gateway — routage par chemin d'URL</footer>
+</main>
+<script>
+  fetch("/info.json", { cache: "no-store" }).then(r => r.json()).then(i => {
+    document.querySelector("#r-web b").textContent = `/ → ${i.hostname} (${i.ip})`;
+  });
+
+  fetch("/api/produits", { cache: "no-store" })
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(data => {
+      document.querySelector("#r-api b").textContent = `/api/produits → ${data.servi_par.hostname} (${data.servi_par.ip})`;
+      document.getElementById("catalogue").innerHTML = data.produits.map(p => `
+        <article class="product">
+          <div class="img" style="background:${p.couleur}">${p.emoji}</div>
+          <div class="body"><h3>${p.nom}</h3><p>${p.description}</p><strong>${p.prix.toFixed(2)} €</strong></div>
+        </article>`).join("");
+    })
+    .catch(err => {
+      document.getElementById("r-api").classList.add("ko");
+      document.querySelector("#r-api b").textContent = `/api/produits → ${err.message}`;
+      document.getElementById("catalogue").outerHTML = `
+        <div class="error"><b>Catalogue indisponible (${err.message}).</b><br>
+        La page vient bien de la VM web, mais l'appel <code>/api/produits</code> n'a pas abouti.
+        Un <code>502</code> signifie que l'Application Gateway n'a trouvé aucune instance saine dans le pool API :
+        vérifiez <i>Intégrité du back-end</i> dans le portail.</div>`;
+    });
+</script>
+</body>
+</html>
